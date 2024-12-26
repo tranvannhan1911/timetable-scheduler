@@ -1,0 +1,7 @@
+{% extends "admin/change_form.html" %}
+
+
+{% block object-tools-items %}
+    {{ block.super }}
+    <li><a class="button" href="{% url 'admin:generate_timetable' object_id %}" target="_blank">Generate timetable</a></li>
+{% endblock %}
