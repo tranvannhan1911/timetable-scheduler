@@ -1,0 +1,98 @@
+{% load custom_filter %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timetable</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th, td {
+            padding: 8px;
+            border: 1px solid #ddd;
+            text-align: center;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .class-header {
+            font-weight: bold;
+            margin-top: 20px;
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <h1>Timetable</h1>
+    
+    <form method="get">
+        <label for="class">Class:</label>
+        <select name="class" id="class">
+            <option value="">All</option>
+            {% for cls in classes %}
+                <option value="{{ cls.id }}" {% if cls.id|stringformat:"s" == request.GET.class %}selected{% endif %}>{{ cls.name }}</option>
+            {% endfor %}
+        </select>
+
+        <label for="teacher">Teacher:</label>
+        <select name="teacher" id="teacher">
+            <option value="">All</option>
+            {% for teacher in teachers %}
+                <option value="{{ teacher.id }}" {% if teacher.id|stringformat:"s" == request.GET.teacher %}selected{% endif %}>{{ teacher.name }}</option>
+            {% endfor %}
+        </select>
+
+        <label for="subject">Subject:</label>
+        <select name="subject" id="subject">
+            <option value="">All</option>
+            {% for subject in subjects %}
+                <option value="{{ subject.id }}" {% if subject.id|stringformat:"s" == request.GET.subject %}selected{% endif %}>{{ subject.name }}</option>
+            {% endfor %}
+        </select>
+
+        <button type="submit">Filter</button>
+    </form>
+
+    {% for lesson_class, sessions in grouped_assignments.items %}
+        <div class="class-header">{{ lesson_class.name }}</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Session</th>
+                    <th>Lesson</th>
+                    {% for day in days_of_week %}
+                        <th>{{ day }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for session, lessons in sessions.items %}
+                    {% for lesson_index, days in lessons.items %}
+                        <tr>
+                            {% if forloop.counter == 1 %}
+                                <td rowspan="{{ lessons|length }}">{{ session | session_name }}</td>
+                            {% endif %}
+                            <td>{{ lesson_index }}</td>
+                            {% for day_index in day_indices %}
+                                <td>
+                                    {% if day_index in days %}
+                                        {% with days|get_item:day_index as assignment %}
+                                            {{ assignment.subject.name }} - {{ assignment.teacher.name }} - {{ assignment.room.name }}
+                                        {% endwith %}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endfor %}
+</body>
+</html>

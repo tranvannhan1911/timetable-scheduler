@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Sum, Count, F, Q
 
 class Semester(models.Model):
     name = models.CharField(max_length=50)
@@ -52,6 +53,9 @@ class Class(models.Model):
     def __str__(self):
         return f"{self.name} - {self.grade}"
 
+    def __lt__(self, other):
+        return self.class_id < other.class_id
+
 class Subject(models.Model):
     subject_id = models.CharField(max_length=10, unique=True)
     name = models.CharField(max_length=100)
@@ -92,8 +96,26 @@ class Teacher(models.Model):
         verbose_name_plural = "Teachers"
 
     def __str__(self):
-        subjects = self.subjects.first()
-        return self.name if not subjects else f"{self.name} - {subjects.subject.name}"
+        return self.name
+
+    def count_lessons_schedule(self, semester):
+        total_lessons = (
+            SubjectSchedule.objects.filter(
+                subject__teachers__teacher=self,  # Subjects linked to the teacher
+                semester=semester  # Semester linked to the timetable
+            )
+            .annotate(
+                class_count=Count(
+                    'subject__class_teachers__lesson_class',  # Count distinct classes
+                    filter=Q(subject__class_teachers__teacher=self),  # Ensure the teacher matches
+                    distinct=True
+                )
+            )
+            .aggregate(
+                total=Sum(F('lesson_count') * F('class_count'))  # Multiply lesson_count with class_count and sum
+            )['total'] or 0
+        )
+        return total_lessons
 
 class TeacherSubject(models.Model):
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="subjects")
@@ -138,11 +160,11 @@ class TimetableSchedule(models.Model):
 # session,start_time,end_time,index
 class Lesson(models.Model):
     SESSION = [
-        ('m', 'Morning'),
-        ('a', 'Afternoon'),
-        ('e', 'Evening')
+        (1, 'Morning'),
+        (2, 'Afternoon'),
+        (3, 'Evening')
     ]
-    session = models.CharField(max_length=3, choices=SESSION)
+    session = models.IntegerField(choices=SESSION)
     start_time = models.TimeField()
     end_time = models.TimeField()
     index = models.IntegerField()
@@ -151,6 +173,10 @@ class Lesson(models.Model):
     class Meta:
         verbose_name = "Lesson"
         verbose_name_plural = "Lessons"
+
+    @property
+    def session_name(self):
+        return dict(self.SESSION).get(self.session)
 
     def __str__(self):
         return f"{self.start_time} - {self.end_time}"

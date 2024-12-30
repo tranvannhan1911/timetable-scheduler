@@ -16,8 +16,10 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from scheduler.views import timetable_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('baton/', include('baton.urls'))
+    # path('baton/', include('baton.urls')),
+    path('timetable/<int:timetable_history_id>/', timetable_view, name='timetable_view'),
 ]

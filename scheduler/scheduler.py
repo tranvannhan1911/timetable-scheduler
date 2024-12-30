@@ -8,15 +8,16 @@ from .models import (
     Teacher, Subject, SubjectSchedule, TeacherSubject, 
     TimetableSchedule, TimetableAssignment, TimetableGenerationHistory
 )
-from .constraints import TeacherConstraint
+from .constraints import TeacherConstraint, WeekendConstraint, NoGapConstraint
 
 class Timetable:
-    constraints = [TeacherConstraint]
+    constraints = [TeacherConstraint, WeekendConstraint]
 
-    def __init__(self, timetable):
-        classes = timetable.classes.all()
+    def __init__(self, timetable_schedule):
+        self.timetable_schedule = timetable_schedule
+        classes = timetable_schedule.classes.all()
         dow = range(0, 7)
-        lessons = timetable.lessons.all()
+        lessons = timetable_schedule.lessons.all()
 
         data = []
         for class_obj in classes:
@@ -37,27 +38,41 @@ class Timetable:
         self.details = pd.DataFrame(data)
 
         for class_obj in classes:
-            subjects = class_obj.grade.subjects.filter(schedules__semester = timetable.semester)
+            subjects = class_obj.grade.subjects.filter(schedules__semester = timetable_schedule.semester)
             
             for subject in subjects:
-                subject_counter = subject.schedules.get(semester = timetable.semester).lesson_count
+                subject_counter = subject.schedules.get(semester = timetable_schedule.semester).lesson_count
                 for _ in range(subject_counter):
-                    idx, lesson = self.get_valid_lesson_schedule(class_obj, subject)
+                    idx, lesson = self.get_empty_lessons_schedule(class_obj, subject)
                     self.details.iloc[idx] = lesson
 
-
+        self.adjust_schedule()
         self.calculate_fitness()
+
+    def adjust_schedule(self):
+        from django.db.models import F
+
+        lesson_sessions = Lesson.objects.values('id', 'session')
+        lesson_session_map = {entry['id']: entry['session'] for entry in lesson_sessions}
+        self.details['session'] = self.details['lesson'].map(lesson_session_map)
+        grouped = self.details.groupby(['class', 'dow', 'session'])
+        
+        for (class_id, day, session_id), group in grouped:
+            group = group.sort_values(by='lesson')
+            
+            non_empty = group[group['subject'] != 0]
+            empty = group[group['subject'] == 0]
+            
+            adjusted_session = pd.concat([non_empty, empty])
+            
+            self.details.loc[group.index, ['subject', 'teacher', 'room']] = adjusted_session[['subject', 'teacher', 'room']].values
+        return
+
 
     def copy(self):
         timetable = copy.deepcopy(self)
         timetable.details = self.details.copy()
         return timetable
-
-    @property
-    def fitness(self):
-        # if self.fitness_score == -1:
-        # self.fitness_score = self.calculate_fitness()
-        return self.fitness_score
 
     def calculate_fitness(self):
         total = 0
@@ -67,6 +82,23 @@ class Timetable:
         self.fitness_score = total
         return total
 
+    def get_taint_lessons(self):
+        taint_lessons = []
+        for constraint in self.constraints:
+            taint_lessons.extend(constraint(self).get_taint_lessons())
+        return taint_lessons
+
+    def get_valid_lessons_indices(self, class_id=None, subject_id=None, teacher_id=None):
+        taint_lessons = self.get_taint_lessons()
+        valid_lessons = self.details[~self.details.index.isin(taint_lessons)]
+        if class_id is not None:
+            valid_lessons = valid_lessons[valid_lessons['class'] == class_id]
+        if subject_id is not None:
+            valid_lessons = valid_lessons[valid_lessons['subject'] == subject_id]
+        if teacher_id is not None:
+            valid_lessons = valid_lessons[valid_lessons['teacher'] == teacher_id]
+        return valid_lessons.index.tolist()
+
     def get_bad_lessons_class(self):
         bad_lessons_indices = []
         for constraint in self.constraints:
@@ -75,15 +107,14 @@ class Timetable:
         # print(bad_lessons_indices)
         return bad_lessons_indices
 
-    def get_valid_lesson_schedule(self, class_obj, subject):
+    def get_empty_lessons_schedule(self, class_obj, subject):
         # get available lesson from data
-        available_lessons = self.details[(self.details['class'] == class_obj.pk) & (self.details['subject'] == 0)]
+        available_lessons = self.details[self.details.index.isin(self.get_valid_lessons_indices())]
+        available_lessons = available_lessons[(available_lessons['class'] == class_obj.pk) & (available_lessons['subject'] == 0)]
         if len(available_lessons) == 0:
             raise Exception("No available lesson")
 
-        # random a lesson to assign
         lesson = available_lessons.sample(n=1)
-        
         teacher_schedule = class_obj.class_teachers.filter(subject=subject).first()
         if teacher_schedule is None:
             raise Exception("No teacher schedule")
@@ -117,61 +148,44 @@ class TimetableScheduler:
         individual.fitness_score = -1
         classes = self.timetable_schedule.classes.all()
         bad_lessons_indices = individual.get_bad_lessons_class()
+
         for class_obj in classes:
             # get first index of class in df
             class_first_idx = individual.details[individual.details['class'] == class_obj.pk].index[0]
             # get last index of class  in df
             class_end_idx = individual.details[individual.details['class'] == class_obj.pk].index[-1]
             class_bad_lesson_idxs = [idx for idx in bad_lessons_indices if class_first_idx <= idx <= class_end_idx]
-            lesson_idxs = individual.details[individual.details['class'] == class_obj.pk].index.tolist()
-            # print(class_obj.name, len(class_bad_lesson_idxs))
+            
+            valid_lesson_idxs = individual.get_valid_lessons_indices(class_id=class_obj.pk)
             if len(class_bad_lesson_idxs) == 0:
                 continue
-            # get two random lessons and swap
+            
             for i in range(20):
                 if i > len(class_bad_lesson_idxs):
                     break
-                # get all indexes of class in bad_lessons_indices
+
                 rand = random.random()
                 probs = [0.2, 0.7, 0.1]
                 if len(class_bad_lesson_idxs) == 1:
                     probs = [0, 0.8, 0.2]
                 action = np.random.choice([1, 2, 3], p=probs)
+
                 if action == 1:
                     lesson1_idx = random.choice(class_bad_lesson_idxs)
                     lesson2_idx = random.choice(class_bad_lesson_idxs)
                 elif action == 2:
                     lesson1_idx = random.choice(class_bad_lesson_idxs)
-                    lesson2_idx = random.choice(lesson_idxs)
+                    lesson2_idx = random.choice(valid_lesson_idxs)
                 else:
-                    lesson1_idx = random.choice(lesson_idxs)
-                    lesson2_idx = random.choice(lesson_idxs)
+                    lesson1_idx = random.choice(valid_lesson_idxs)
+                    lesson2_idx = random.choice(valid_lesson_idxs)
 
-                # individual.details.iloc[[lesson1_idx, lesson2_idx]] = individual.details.iloc[[lesson2_idx, lesson1_idx]].values
                 columns_to_swap = ['subject', 'teacher', 'room']
                 individual.details.loc[[lesson1_idx, lesson2_idx], columns_to_swap] = (
                     individual.details.loc[[lesson2_idx, lesson1_idx], columns_to_swap].values
                 )
-                # print("s", individual.details.iloc[lesson1_idx], individual.details.iloc[lesson2_idx], individual.details.iloc[lesson1_idx], individual.details.iloc[lesson2_idx])
-
-                # get a random lesson to change teacher
-                # action = np.random.choice([1, 2, 3], p=[0.35*gene_mutation_rate, 0.15*gene_mutation_rate, 0.5 + 0.5*(1 - gene_mutation_rate)])
-                # if action <= 2:
-                #     if action == 1:
-                #         lesson_idx = random.choice(class_bad_lesson_idxs)
-                #     elif action == 2:
-                #         not_empty_lessons = individual.details[(individual.details['class'] == class_obj.pk) & (individual.details['subject'] != 0)]
-                #         lesson_idx = random.choice(not_empty_lessons.index.tolist())
-                #     lesson = individual.details.iloc[lesson_idx]
-                #     old_teacher = lesson['teacher']
-                #     subject = lesson['subject']
-                #     if subject != 0:
-                #         subject_obj = Subject.objects.get(pk = subject)
-                #         teacher_schedule = class_obj.class_teachers.filter(subject=subject_obj).first()
-                #         lesson['teacher'] = teacher_schedule.teacher.pk
-                #         # print("t", old_teacher, individual.details.iloc[lesson_idx])
-
             
+        individual.adjust_schedule()
         individual.calculate_fitness()
 
 
@@ -182,8 +196,8 @@ class TimetableScheduler:
         # at each step, decide whether to take the gene from another parent?
         dominant = parent1.copy()
         weak = parent2.copy()
-        p1_fitness = parent1.fitness
-        p2_fitness = parent2.fitness
+        p1_fitness = parent1.fitness_score
+        p2_fitness = parent2.fitness_score
         if p1_fitness > p2_fitness:
             dominant = parent2.copy()
             weak = parent1.copy()
@@ -202,9 +216,6 @@ class TimetableScheduler:
             lack_subjects = []
             redundant_subjects = []
 
-            # subjects = class_obj.grade.subjects
-            # for subject in subjects:
-            #     subject.schedules.get(semester = self.timetable.semester).
             # get subjects of class that have subject schedule in semester
             subjects = class_obj.grade.subjects.filter(schedules__semester = self.timetable_schedule.semester)
             for subject in subjects:
@@ -213,9 +224,9 @@ class TimetableScheduler:
                 if len(df_class[df_class['subject'] == subject.pk]) < lesson_count:
                     lack_subjects.append(subject.pk)
                     for _ in range(lesson_count - len(df_class[df_class['subject'] == subject.pk])):
-                        idx, lesson = dominant.get_valid_lesson_schedule(class_obj, subject)
+                        idx, lesson = dominant.get_empty_lessons_schedule(class_obj, subject)
                         dominant.details.iloc[idx] = lesson
-                    # print(dominant.get_valid_lesson_schedule(class_obj, subject))
+                    # print(dominant.get_empty_lessons_schedule(class_obj, subject))
 
                 elif len(df_class[df_class['subject'] == subject.pk]) > lesson_count:
                     redundant_subjects.append(subject.pk)
@@ -285,13 +296,16 @@ class TimetableScheduler:
         #     timetable1.get_bad_lessons_class()
 
         #     # print(len(timetable1.details[timetable1.details['subject'] != 0]))
-        #     print(timetable1.fitness)
+        #     print(timetable1.fitness_score)
 
         #     # print(len(timetable1.details[(timetable1.details['class'] == 1) & (timetable1.details['subject'] != 0)]))
-        #     child = self.mutate(timetable1)
-        #     print(child.fitness)
+        #     child = timetable1
+        #     for i in range(10):
+        #         child = self.mutate(child)
+        #     print(child.fitness_score)
 
-        #     timetable1.details.to_csv("timetable.csv")
+        #     child.details.to_csv("timetable.csv")
+        # self.save(child)
         # return
         population = self.generate_population()
         print(population[0].details)
@@ -301,10 +315,13 @@ class TimetableScheduler:
         probabilities = self.generate_probabilities(excellent_population_size)
         print(probabilities)
         
+        start_gen_time = time.time()
+        end_gen_time = time.time()
         for generation in range(self.generations):
-            population.sort(key=lambda x: x.fitness)
-            print(f"Generation {generation}: Best Fitness = {population[0].fitness}")
-            if population[0].fitness == 0:
+            population.sort(key=lambda x: x.fitness_score)
+            print(f"Generation {generation}: Best Fitness = {population[0].fitness_score}, Time = {end_gen_time - start_gen_time}s")
+            start_gen_time = time.time()
+            if population[0].fitness_score == 0:
                 break
 
             new_generation = population[:excellent_population_size]
@@ -318,16 +335,18 @@ class TimetableScheduler:
                 child = self.mutate(parent1)
                 new_generation.append(child)
             population = new_generation
+            end_gen_time = time.time()
         end_time = time.time()
         print("time: ", end_time - start_time)
         population[0].details.to_csv("timetable.csv")
+        print("saving")
         self.save(population[0])
         return
 
     def save(self, timetable):
         history = TimetableGenerationHistory.objects.create(
             timetable = self.timetable_schedule,
-            fitness = timetable.fitness
+            fitness = timetable.fitness_score
         )
         for idx, assignment in timetable.details.iterrows():
             if assignment['subject'] != 0:
