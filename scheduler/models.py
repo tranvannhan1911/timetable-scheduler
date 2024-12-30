@@ -15,8 +15,6 @@ class Semester(models.Model):
     def __str__(self):
         return f"{self.name} - {self.year}"
 
-
-# room_id,room_name
 class Room(models.Model):
     room_id = models.CharField(max_length=10, unique=True)
     name = models.CharField(max_length=100)
@@ -39,7 +37,6 @@ class Grade(models.Model):
     def __str__(self):
         return self.name
 
-# class_id,class_name,grade,room_id
 class Class(models.Model):
     class_id = models.CharField(max_length=10, unique=True)
     name = models.CharField(max_length=100)
@@ -60,7 +57,6 @@ class Subject(models.Model):
     subject_id = models.CharField(max_length=10, unique=True)
     name = models.CharField(max_length=100)
     grade = models.ForeignKey(Grade, on_delete=models.CASCADE, related_name="subjects")
-    # lesson_count = models.IntegerField(default=0)
 
     class Meta:
         verbose_name = "Subject"
@@ -73,7 +69,6 @@ class Subject(models.Model):
 class SubjectSchedule(models.Model):
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="schedules")
     semester = models.ForeignKey(Semester, on_delete=models.CASCADE, related_name="schedules")
-    # default is subject.lesson_count
     lesson_count = models.IntegerField(default=0)
 
     class Meta:
@@ -84,7 +79,6 @@ class SubjectSchedule(models.Model):
     def __str__(self):
         return f"{self.subject.name} - {self.semester.name}: {self.lesson_count} lessons/week"
 
-# mgv,name,min_lessons,max_lessons
 class Teacher(models.Model):
     teacher_id = models.CharField(max_length=10, unique=True)
     name = models.CharField(max_length=100)
@@ -101,18 +95,18 @@ class Teacher(models.Model):
     def count_lessons_schedule(self, semester):
         total_lessons = (
             SubjectSchedule.objects.filter(
-                subject__teachers__teacher=self,  # Subjects linked to the teacher
-                semester=semester  # Semester linked to the timetable
+                subject__teachers__teacher=self, 
+                semester=semester
             )
             .annotate(
                 class_count=Count(
-                    'subject__class_teachers__lesson_class',  # Count distinct classes
-                    filter=Q(subject__class_teachers__teacher=self),  # Ensure the teacher matches
+                    'subject__class_teachers__lesson_class',
+                    filter=Q(subject__class_teachers__teacher=self),
                     distinct=True
                 )
             )
             .aggregate(
-                total=Sum(F('lesson_count') * F('class_count'))  # Multiply lesson_count with class_count and sum
+                total=Sum(F('lesson_count') * F('class_count'))
             )['total'] or 0
         )
         return total_lessons
@@ -133,7 +127,6 @@ class ClassTeacherSchedule(models.Model):
     lesson_class = models.ForeignKey(Class, on_delete=models.CASCADE, related_name="class_teachers")
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="class_teachers")
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="class_teachers")
-    # default is subject.lesson_count
 
     class Meta:
         verbose_name = "Class Teacher Schedule"
@@ -157,7 +150,25 @@ class TimetableSchedule(models.Model):
     def __str__(self):
         return self.name
 
-# session,start_time,end_time,index
+class TimetableGenerationHistory(models.Model):
+    timetable = models.ForeignKey(TimetableSchedule, on_delete=models.CASCADE, related_name="generations")
+    generation_history = models.IntegerField(default=1)
+    fitness = models.FloatField()
+    date_created = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.pk is None:
+            self.generation_history = self.timetable.generations.order_by('-generation_history').first().generation_history + 1
+        super(TimetableGenerationHistory, self).save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.timetable.name} - Generation history #{self.generation_history}"
+
+    class Meta:
+        verbose_name = "Timetable Generation History"
+        verbose_name_plural = "Timetable Generation Histories"
+        unique_together = ('timetable', 'generation_history')
+
 class Lesson(models.Model):
     SESSION = [
         (1, 'Morning'),
@@ -180,26 +191,6 @@ class Lesson(models.Model):
 
     def __str__(self):
         return f"{self.start_time} - {self.end_time}"
-
-class TimetableGenerationHistory(models.Model):
-    timetable = models.ForeignKey(TimetableSchedule, on_delete=models.CASCADE, related_name="generations")
-    generation_history = models.IntegerField(default=1)
-    fitness = models.FloatField()
-    date_created = models.DateTimeField(auto_now_add=True)
-
-    def save(self, *args, **kwargs):
-        if self.pk is None:
-            self.generation_history = self.timetable.generations.order_by('-generation_history').first().generation_history + 1
-        super(TimetableGenerationHistory, self).save(*args, **kwargs)
-
-    def __str__(self):
-        return f"{self.timetable.name} - Generation history #{self.generation_history}"
-
-    class Meta:
-        verbose_name = "Timetable Generation History"
-        verbose_name_plural = "Timetable Generation Histories"
-        unique_together = ('timetable', 'generation_history')
-
 
 class TimetableAssignment(models.Model):
     timetable_generation_history = models.ForeignKey(TimetableGenerationHistory, on_delete=models.CASCADE, related_name="assignments")

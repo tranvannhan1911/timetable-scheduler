@@ -74,8 +74,7 @@ class TeacherAdmin(ModelAdmin):
     inlines = [TeacherSubjectInline]
 
     def class_count(self, obj):
-        # Assuming a relationship between Teacher and Class models through a Subject model
-        return obj.class_teachers.count()  # Adjust based on your actual models
+        return obj.class_teachers.count()
     class_count.short_description = 'Number of Classes'
 
 admin.site.register(Teacher, TeacherAdmin)
@@ -95,7 +94,7 @@ class TimetableGenerationHistoryInline(TabularInline):
 
     def view_timetable(self, obj):
         if obj and obj.id:
-            url = reverse('timetable_view', args=[obj.id])  # Use Django reverse to build the URL
+            url = reverse('timetable_view', args=[obj.id])
             return format_html('<a href="{}" target="_blank">View Timetable</a>', url)
         return "-"
     
@@ -177,14 +176,6 @@ class TimetableScheduleAdmin(ModelAdmin):
     form = TimetableScheduleForm
     inlines = [TeacherLessonCountInline, LessonInline, TimetableGenerationHistoryInline]
 
-    # def get_inline_instances(self, request, obj=None):
-    #     inline_instances = super().get_inline_instances(request, obj)
-    #     for inline in inline_instances:
-    #         if isinstance(inline, TeacherLessonCountInline):
-    #             inline.parent_object = obj
-    #     return inline_instances
-
-    # add button to create timetable details in change form
     def change_view(self, request, object_id, form_url='', extra_context=None):
         extra_context = extra_context or {}
         extra_context['show_create_timetable'] = True
@@ -198,8 +189,7 @@ class TimetableScheduleAdmin(ModelAdmin):
         return custom_urls + urls
 
     def check_teacher_lesson(self, timetable_schedule):
-        # Validate that all teachers' lessons are within the allowed range
-        teachers = timetable_schedule.teachers.all()  # Update as per your model's relation to teachers
+        teachers = timetable_schedule.teachers.all()
         invalid_teachers = []
 
         for teacher in teachers:
