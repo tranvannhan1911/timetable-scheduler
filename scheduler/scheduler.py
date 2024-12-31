@@ -143,7 +143,7 @@ class TimetableScheduler:
         self.excellent_population = 0.2
         self.good_population_size = 0.4
 
-    def mutate(self, individual, gene_mutation_rate=1):
+    def mutate(self, individual):
         individual = individual.copy()
         individual.fitness_score = -1
         classes = self.timetable_schedule.classes.all()
@@ -160,10 +160,7 @@ class TimetableScheduler:
             if len(class_bad_lesson_idxs) == 0:
                 continue
             
-            for i in range(20):
-                if i > len(class_bad_lesson_idxs):
-                    break
-
+            for i in range(min(len(class_bad_lesson_idxs), 20)):
                 rand = random.random()
                 probs = [0.2, 0.7, 0.1]
                 if len(class_bad_lesson_idxs) == 1:

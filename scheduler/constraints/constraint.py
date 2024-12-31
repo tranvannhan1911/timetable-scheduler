@@ -7,3 +7,6 @@ class TimetableConstraint:
 
     def get_taint_lessons(self):
         return []
+
+    def get_bad_lessons_class(self):
+        return []
